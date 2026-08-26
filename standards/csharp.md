@@ -5,8 +5,8 @@ title: C# Standards
 ---
 # C# Standards
 
-Applies to all C# we write. Domain and Application layers are the strict zone; interop and
-infrastructure relax only where noted.
+Applies to all C# we write. Code that models or orchestrates the domain is the strict zone; a wrapper
+around a foreign object model relaxes only at its internal surface.
 
 ## Error handling
 
@@ -72,63 +72,6 @@ valid. Illegal calls should be compile errors, not runtime ones.
 Because C# has no exhaustiveness over class hierarchies, a sum's `switch` must carry a catch-all.
 Its presence is never the defect; needing it to be *correct* is — that behaviour belonged on a leaf.
 
-## Slices and CQS
-
-One file per use case, `VerbNoun.cs`: a static wrapper with nested `Command`/`Query`, `Handler`,
-and `Validator` when needed. Extract to a subfolder only past ~200 lines. **Handler slices only** —
-value objects and events keep their own files.
-
-CQS is the boundary between a host (VSTO add-in, API, CLI) and everything else: one dispatch path,
-and the single place cross-cutting decorators attach. **No MediatR** — register handlers directly.
-
-**The handler is a thin shell.** It reads through ports, hands the decision to the pure core, and
-applies the result. It does not decide anything itself — a business `if` in a handler is logic that
-belongs in the core.
-
-```csharp
-public static class SmartPaste
-{
-    public sealed class Command : ICommand { public string DisplayName => "Smart Paste"; }
-
-    [RequireEntitlement(EntitlementType.WordStandardTools)]   // decorators attach here
-    public sealed class Handler(IDocumentHost host, IProfileSource profiles, IReportPresenter reports)
-        : ICommandHandler<Command, Unit>
-    {
-        public Result<Unit, Error> Handle(Command command)
-        {
-            var result =
-                from reading     in host.ReadSource()                      // shell: port in
-                from destination in host.ReadDestination()
-                from profile     in profiles.Current
-                let conformance  = Conform.Of(reading.Content,             // core: decides; total
-                                              destination.Context, profile)
-                from applied     in host.Apply(conformance.Plan(), …)      // shell: effect out
-                select applied;
-
-            return result
-                .Tap(c => reports.Present(c.Report()))
-                .MapError(e => new Error(e.Code, e.Message))               // ACL at the edge
-                .Map(_ => Unit.Instance);
-        }
-    }
-}
-```
-
-Three things to copy from this shape:
-
-- **The core call is total.** `Conform.Of` cannot refuse, so the handler has no failure branch to
-  write. Push decisions into the core until the shell has nothing left to decide.
-- **Query syntax over `Result`** reads the happy path top-to-bottom and short-circuits on the first
-  failure. Prefer it to a nested `Bind` chain once there are three or more steps.
-- **One error translation, at the handler's edge.** Where a module has its own error type, map it to
-  the host contract in exactly one place — that map is the anti-corruption layer. Two error types
-  are fine; two translation points are not.
-
-Commands write and return `Result`; queries read and cause no side effects. The handler method name
-and whether it is synchronous are **per-repo contract decisions** — an STA host (VSTO) stays
-synchronous deliberately; a server host takes `CancellationToken` and returns `Task`. Whichever a
-repo picks, decorators wrap that exact signature, so it must not vary within a repo.
-
 ## Dependencies
 
 Constructor injection only. No service locator, no `IConfiguration` read inside a handler.
@@ -152,16 +95,19 @@ from the method name, the name is wrong.
 | Boolean | `Is`/`Has`/`Can`/`Should` prefix |
 | Test method | `MethodName_Scenario_ExpectedResult` |
 
-| Suffix | Role | Lives in |
-|---|---|---|
-| `Handler`, `Command`/`Query`, `Validator` | Use case | nested in the `VerbNoun.cs` slice |
-| `Dto` | Shared data shape | Application feature area root |
-| `Decorator` | Cross-cutting wrapper | Application common behaviours |
-| `Repository` | Data store access | Infrastructure (interface in Domain) |
-| `Client`, `Adapter`, `Mapper`, `Provider`, `Factory` | External access / transformation | Infrastructure |
-| `Options` / `Settings` | Config POCO / typed accessor | Infrastructure |
-| `Wrapper`, `Finder`, `Detector` | COM abstraction / search / state read | AddIn interop |
-| `Controller`, `EventHandler` | UI or Office event to command | AddIn UI |
+| Suffix | Role |
+|---|---|
+| `Handler`, `Command`/`Query`, `Validator` | Use case |
+| `Dto` | Shared data shape |
+| `Decorator` | Cross-cutting wrapper |
+| `Repository` | Data store access |
+| `Client`, `Adapter`, `Mapper`, `Provider`, `Factory` | External access / transformation |
+| `Options` / `Settings` | Config POCO / typed accessor |
+| `Wrapper`, `Finder`, `Detector` | Foreign-object-model abstraction / search / state read |
+| `Controller`, `EventHandler` | UI or host event to command |
+
+Where each suffix *lives* is a per-repo decision — a repo states it in its own `.standards/`, because
+the answer is that repo's project layout and nothing shared can know it.
 
 **No `Helper`, `Manager`, `Utility`, or `Service` classes** — name the actual responsibility
 (`Sender`, `Checker`, `Policy`, `Calculator`). Use-case orchestration is a `Handler`; an
