@@ -54,7 +54,8 @@ function Read-Standard {
 
 function Write-Target {
     param([string] $Path, [string] $Content)
-    $existing = if (Test-Path $Path) { [System.IO.File]::ReadAllText($Path) } else { $null }
+    # `* text=auto` gives the working tree CRLF, so compare on LF or -Check calls every file stale on Windows.
+    $existing = if (Test-Path $Path) { [System.IO.File]::ReadAllText($Path).Replace("`r`n", "`n") } else { $null }
     if ($existing -eq $Content) { return 'unchanged' }
     if ($Check) { return 'STALE' }
     $dir = Split-Path -Parent $Path
