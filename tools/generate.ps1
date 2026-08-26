@@ -78,7 +78,25 @@ if ($collisions) {
     throw "Local standard(s) collide with shared names: $($collisions.Name -join ', '). Rename the local file."
 }
 
+function Get-MatchCount {
+    param([string] $Root, [string] $Glob)
+    # Worktrees hold stale copies of the whole tree (6,965 .cs in one real repo), so a **/-prefixed
+    # glob reports ~9x its true match count. They are never the target of a rule.
+    # Segment-aware, because `-like` is not: `*Domain\*` also matches `Core.Domain\`, so a glob
+    # bound to the wrong tree reports a healthy count instead of the small wrong one that betrays it.
+    $rx = [regex]::Escape($Glob) -replace '/', '\\'
+    $rx = $rx -replace '\\\*\\\*\\\\', '(?:.*\\)?'   # **/  -> any number of leading segments
+    $rx = $rx -replace '\\\*\\\*', '.*'              # **   -> anything
+    $rx = $rx -replace '\\\*', '[^\\]*'              # *    -> within one segment
+    $rx = '^' + $rx + '$'
+    $files = Get-ChildItem -Path $Root -Recurse -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -notmatch '\\(obj|bin|node_modules|\.git)\\' -and
+                       $_.FullName -notmatch '\\\.claude\\worktrees\\' }
+    ($files | Where-Object { $_.FullName.Substring($Root.Length).TrimStart('\') -match $rx }).Count
+}
+
 $stale = $false
+$deadGlob = @()
 foreach ($source in $sources) {
     $std    = Read-Standard $source.File.FullName
     $banner = $source.Banner -f $source.File.Name
@@ -89,6 +107,17 @@ foreach ($source in $sources) {
     # GitHub docs: multiple patterns are comma-separated with NO spaces — `applyTo: "**/*.ts,**/*.tsx"`.
     $copilot = "---`napplyTo: '$($std.Scope -join ',')'`n---`n$banner`n`n$($std.Body)"
 
+    # ArchUnit 0.23.0 and ArchUnitNET 0.11.0 both made "selector matched nothing" a failure rather
+    # than a pass, as a breaking change - a renamed folder otherwise leaves a green rule checking
+    # nothing. Neither Claude Code nor Copilot has that guard, so it lives here. Reporting the count
+    # matters as much as the zero check: **/Domain/** matching 7 files where 69 are expected is a
+    # wrong-tree binding that a bare >0 test passes green.
+    foreach ($glob in $std.Scope) {
+        $n = (Get-MatchCount $TargetRepo $glob)
+        '{0,-26} {1} scope   {2,6} files  {3}' -f $std.Name, $source.Origin, $n, $glob
+        if ($n -eq 0) { $deadGlob += "$($std.Name): '$glob'" }
+    }
+
     $results = @(
         @{ Tool = 'claude ';  Result = Write-Target (Join-Path $TargetRepo ".claude/rules/$($std.Name).md") $claude }
         @{ Tool = 'copilot';  Result = Write-Target (Join-Path $TargetRepo ".github/instructions/$($std.Name).instructions.md") $copilot }
@@ -97,6 +126,12 @@ foreach ($source in $sources) {
         if ($r.Result -eq 'STALE') { $stale = $true }
         '{0,-26} {1} {2} {3}' -f $std.Name, $source.Origin, $r.Tool, $r.Result
     }
+}
+
+if ($deadGlob) {
+    ''
+    Write-Error ("Scope matched no files - the rule is silently dead in this repo:`n  " + ($deadGlob -join "`n  "))
+    exit 1
 }
 
 if ($Check -and $stale) {
