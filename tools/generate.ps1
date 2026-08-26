@@ -82,17 +82,20 @@ function Get-MatchCount {
     param([string] $Root, [string] $Glob)
     # Worktrees hold stale copies of the whole tree (6,965 .cs in one real repo), so a **/-prefixed
     # glob reports ~9x its true match count. They are never the target of a rule.
-    # Segment-aware, because `-like` is not: `*Domain\*` also matches `Core.Domain\`, so a glob
+    # Everything is compared on forward slashes. The first version built a Windows-shaped regex,
+    # which matched nothing on a Linux runner and failed the whole gate on its first real CI run.
+    # Segment-aware, because `-like` is not: `*Domain/*` also matches `Core.Domain/`, so a glob
     # bound to the wrong tree reports a healthy count instead of the small wrong one that betrays it.
-    $rx = [regex]::Escape($Glob) -replace '/', '\\'
-    $rx = $rx -replace '\\\*\\\*\\\\', '(?:.*\\)?'   # **/  -> any number of leading segments
-    $rx = $rx -replace '\\\*\\\*', '.*'              # **   -> anything
-    $rx = $rx -replace '\\\*', '[^\\]*'              # *    -> within one segment
+    $rx = [regex]::Escape($Glob) -replace '\\\*\\\*/', '(?:.*/)?'   # **/ -> any leading segments
+    $rx = $rx -replace '\\\*\\\*', '.*'                             # **  -> anything
+    $rx = $rx -replace '\\\*', '[^/]*'                              # *   -> within one segment
     $rx = '^' + $rx + '$'
+    $rootLen = $Root.TrimEnd('\', '/').Length + 1
     $files = Get-ChildItem -Path $Root -Recurse -File -ErrorAction SilentlyContinue |
-        Where-Object { $_.FullName -notmatch '\\(obj|bin|node_modules|\.git)\\' -and
-                       $_.FullName -notmatch '\\\.claude\\worktrees\\' }
-    ($files | Where-Object { $_.FullName.Substring($Root.Length).TrimStart('\') -match $rx }).Count
+        ForEach-Object { $_.FullName.Substring($rootLen) -replace '\\', '/' } |
+        Where-Object { $_ -notmatch '(^|/)(obj|bin|node_modules|\.git)/' -and
+                       $_ -notmatch '(^|/)\.claude/worktrees/' }
+    ($files | Where-Object { $_ -match $rx }).Count
 }
 
 $stale = $false
