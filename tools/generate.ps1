@@ -90,7 +90,10 @@ function Get-MatchCount {
     $rx = $rx -replace '\\\*\\\*', '.*'                             # **  -> anything
     $rx = $rx -replace '\\\*', '[^/]*'                              # *   -> within one segment
     $rx = '^' + $rx + '$'
-    $rootLen = $Root.TrimEnd('\', '/').Length + 1
+    # Resolve first: CI passes `-TargetRepo .`, and trimming a 1-char root off an absolute
+    # FullName leaves a mangled prefix that only a **/-leading glob can absorb — so root-anchored
+    # scopes silently matched nothing while the **/ ones looked fine.
+    $rootLen = (Resolve-Path $Root).Path.TrimEnd('\', '/').Length + 1
     $files = Get-ChildItem -Path $Root -Recurse -File -ErrorAction SilentlyContinue |
         ForEach-Object { $_.FullName.Substring($rootLen) -replace '\\', '/' } |
         Where-Object { $_ -notmatch '(^|/)(obj|bin|node_modules|\.git)/' -and
