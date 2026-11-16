@@ -11,12 +11,15 @@ around a foreign object model relaxes only at its internal surface.
 ## Error handling
 
 - `Result<TValue, Error>` for anything that can fail. Never exceptions for expected outcomes.
-- `Maybe<T>` for optional values. Prefer it to nullable `T?` in return positions.
+- `Maybe<T>` for a value that can genuinely be absent and the caller must decide what that means. Prefer it
+  to nullable `T?` in return positions. A value with a known default is read with a plain member that
+  returns the default (`paragraph.Spacing`), never as `Find<T>().Map(...).GetValueOrDefault(...)` at the call site.
 - `Result<Maybe<T>, Error>` when an operation can fail *and* legitimately find nothing.
 - Only `CSharpFunctionalExtensions` — no `OneOf`, `ErrorOr`, `FluentResults`, or a home-grown
   `Result<T>`. Parallel libraries fragment the domain language and break combinator chains.
-- Compose with combinators. An interior `if (r.IsFailure) return r.Error; var x = r.Value;`
-  ladder is the anti-pattern `Bind`/`Map`/`Match` exist to remove.
+- Compose with combinators inside an operation. An interior `if (r.IsFailure) return r.Error; var x = r.Value;`
+  ladder is the anti-pattern `Bind`/`Map`/`Match` exist to remove. A public surface still offers the plain
+  call a caller would write, not a chain the caller must assemble.
 - Exceptions are for programmer error (guard clauses), not business outcomes.
 
 ### Domain errors
